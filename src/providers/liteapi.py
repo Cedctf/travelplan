@@ -11,6 +11,8 @@ _SEARCH_LIMIT = 10
 class LiteAPIHotelProvider:
     def __init__(self, api_key: str | None = None):
         self._api_key = api_key or get_settings().liteapi_api_key
+        self._offer_ids: dict[str, str] = {}
+        self._offers: dict[str, dict] = {}
 
     def _headers(self) -> dict:
         return {
@@ -63,19 +65,22 @@ class LiteAPIHotelProvider:
         return sorted(rates, key=lambda rate: rate["price"])
 
     def select(self, rate_id: str) -> dict:
+        offer_id = self._offer_ids.get(rate_id, rate_id)
         try:
             response = httpx.post(f"{_BASE_URL}/rates/prebook", headers=self._headers(),
-                                  json={"offerId": rate_id, "usePaymentSdk": False},
+                                  json={"offerId": offer_id, "usePaymentSdk": False},
                                   timeout=_TIMEOUT)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise Unavailable(str(exc)) from exc
         data = response.json().get("data", {})
+        details = self._offers.get(rate_id, {})
         return {
+            **details,
             "provider": "liteapi",
             "prebook_id": data.get("prebookId"),
-            "price": data.get("price"),
-            "currency": data.get("currency"),
+            "price": data.get("price", details.get("price")),
+            "currency": data.get("currency", details.get("currency")),
         }
 
     def book(self, rate_id: str, guest: dict) -> dict:
@@ -102,6 +107,7 @@ class LiteAPIHotelProvider:
     def _cheapest_offer(self, entry: dict, names: dict) -> dict | None:
         hotel_id = entry.get("hotelId")
         best = None
+        best_offer_id = None
         for room in entry.get("roomTypes", []):
             offer_id = room.get("offerId")
             for rate in room.get("rates", []):
@@ -114,7 +120,7 @@ class LiteAPIHotelProvider:
                     continue
                 if best is None or amount < best["price"]:
                     best = {
-                        "id": offer_id,
+                        "id": hotel_id,
                         "provider": "liteapi",
                         "hotel_id": hotel_id,
                         "name": names.get(hotel_id),
@@ -122,4 +128,8 @@ class LiteAPIHotelProvider:
                         "currency": currency,
                         "board": rate.get("boardName"),
                     }
+                    best_offer_id = offer_id
+        if best is not None:
+            self._offer_ids[hotel_id] = best_offer_id
+            self._offers[hotel_id] = best
         return best
