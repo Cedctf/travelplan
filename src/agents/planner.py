@@ -8,6 +8,7 @@ from src.orchestration.state import trace
 from src.tools.budget import CostSummary, analyze_savings, budget_calculator
 
 _COMPONENT_TO_AGENT = {"flights": "flight", "hotel": "hotel", "activities": "itinerary"}
+_MAX_REPLANS = 3
 
 
 class Allocations(BaseModel):
@@ -119,6 +120,17 @@ def evaluate(state: dict) -> dict:
         updates.update(trace("planner",
                              f"Total {summary.total} is within budget.",
                              "evaluate", "within budget -> approval"))
+        return updates
+
+    replans = len(state.get("replanning_history", []))
+    if replans >= _MAX_REPLANS:
+        note = (
+            f"Still over budget after {replans} replanning attempts; no feasible "
+            f"solution found. Propose relaxing a constraint or raising the budget."
+        )
+        updates["next_action"] = "infeasible"
+        updates["planner_notes"] = [note]
+        updates.update(trace("planner", note, "evaluate", "infeasible"))
         return updates
 
     ranked = analyze_savings(summary, state.get("budget_allocations", {}))
