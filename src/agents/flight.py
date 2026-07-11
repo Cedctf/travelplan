@@ -38,6 +38,7 @@ def _task(state: dict) -> str:
     constraints = ", ".join(state.get("constraints", [])) or "none"
     return (
         f"Trip request: {state.get('trip_goal')}\n"
+        f"Origin: {state.get('origin')}\n"
         f"Destination: {state.get('destination')}\n"
         f"Dates: {state.get('dates')}\n"
         f"Travellers: {state.get('travellers')}\n"
