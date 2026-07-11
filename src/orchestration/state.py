@@ -4,6 +4,7 @@ from typing import Annotated, TypedDict
 
 class TravelState(TypedDict):
     trip_goal: str
+    origin: str
     destination: str
     dates: dict
     travellers: int
@@ -29,6 +30,7 @@ class TravelState(TypedDict):
 def new_state(request: str) -> TravelState:
     return TravelState(
         trip_goal=request,
+        origin="",
         destination="",
         dates={},
         travellers=0,
