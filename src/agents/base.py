@@ -39,17 +39,40 @@ def messages_to_trace(agent: str, messages: list) -> list[dict]:
 
 
 def extract_selection(messages: list, select_tool: str):
-    select_ids = set()
+    ids = _tool_call_ids(messages, select_tool)
+    selection = None
+    for message in messages:
+        if isinstance(message, ToolMessage) and message.tool_call_id in ids:
+            selection = _coerce(message.content)
+    return selection
+
+
+def collect_tool_results(messages: list, tool_name: str) -> list:
+    ids = _tool_call_ids(messages, tool_name)
+    results = []
+    for message in messages:
+        if isinstance(message, ToolMessage) and message.tool_call_id in ids:
+            coerced = _coerce(message.content)
+            results.extend(coerced if isinstance(coerced, list) else [coerced])
+    return results
+
+
+def final_text(messages: list) -> str:
+    for message in reversed(messages):
+        if isinstance(message, AIMessage) and isinstance(message.content, str) \
+                and message.content.strip():
+            return message.content
+    return ""
+
+
+def _tool_call_ids(messages: list, tool_name: str) -> set:
+    ids = set()
     for message in messages:
         if isinstance(message, AIMessage):
             for call in (getattr(message, "tool_calls", []) or []):
-                if call["name"] == select_tool:
-                    select_ids.add(call["id"])
-    selection = None
-    for message in messages:
-        if isinstance(message, ToolMessage) and message.tool_call_id in select_ids:
-            selection = _coerce(message.content)
-    return selection
+                if call["name"] == tool_name:
+                    ids.add(call["id"])
+    return ids
 
 
 def _truncate(text: str) -> str:
