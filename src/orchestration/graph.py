@@ -6,7 +6,7 @@ from src.agents.booking import booking_node
 from src.agents.flight import flight_node
 from src.agents.hotel import hotel_node
 from src.agents.itinerary import itinerary_node
-from src.agents.planner import evaluate, planner_intake
+from src.agents.planner import budget_gate, evaluate, planner_intake
 from src.orchestration.state import TravelState
 
 
@@ -22,6 +22,12 @@ def human_approval(state: dict) -> dict:
         "question": "Would you like me to book this itinerary?",
     })
     return {"approval": decision}
+
+
+def _route_after_gate(state: dict) -> str:
+    if state.get("next_action") == "infeasible":
+        return END
+    return "itinerary"
 
 
 def _route_after_evaluate(state: dict) -> str:
@@ -42,6 +48,7 @@ def build_graph(checkpointer=None):
     graph.add_node("planner", planner_intake)
     graph.add_node("flight", flight_node)
     graph.add_node("hotel", hotel_node)
+    graph.add_node("budget_gate", budget_gate)
     graph.add_node("itinerary", itinerary_node)
     graph.add_node("evaluate", evaluate)
     graph.add_node("human_approval", human_approval)
@@ -50,8 +57,12 @@ def build_graph(checkpointer=None):
     graph.add_edge(START, "planner")
     graph.add_edge("planner", "flight")
     graph.add_edge("planner", "hotel")
-    graph.add_edge("flight", "itinerary")
-    graph.add_edge("hotel", "itinerary")
+    graph.add_edge("flight", "budget_gate")
+    graph.add_edge("hotel", "budget_gate")
+    graph.add_conditional_edges(
+        "budget_gate", _route_after_gate,
+        ["itinerary", END],
+    )
     graph.add_edge("itinerary", "evaluate")
     graph.add_conditional_edges(
         "evaluate", _route_after_evaluate,
