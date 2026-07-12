@@ -2,17 +2,9 @@ from src.orchestration.state import trace
 from src.providers.base import ProviderError
 from src.providers.registry import get_flight_provider, get_hotel_provider
 
-_TEST_TRAVELLER = {
-    "title": "mr",
-    "given_name": "Test",
-    "family_name": "Traveller",
-    "gender": "m",
-    "born_on": "1990-01-01",
-    "email": "test@example.com",
-    "phone_number": "+447700900000",
-    "firstName": "Test",
-    "lastName": "Traveller",
-}
+def _traveller(state: dict) -> dict:
+    """Traveller details as supplied by the user from the frontend."""
+    return {k: v for k, v in (state.get("traveller") or {}).items() if v}
 
 
 def _book_flight(state: dict) -> dict:
@@ -21,7 +13,7 @@ def _book_flight(state: dict) -> dict:
         return {"status": "skipped"}
     try:
         return {"status": "confirmed",
-                **get_flight_provider().book(flight["id"], [_TEST_TRAVELLER])}
+                **get_flight_provider().book(flight["id"], [_traveller(state)])}
     except ProviderError as exc:
         return {"status": "failed", "error": str(exc)}
 
@@ -32,7 +24,7 @@ def _book_hotel(state: dict) -> dict:
         return {"status": "skipped"}
     try:
         return {"status": "confirmed",
-                **get_hotel_provider().book(hotel["id"], _TEST_TRAVELLER)}
+                **get_hotel_provider().book(hotel["id"], _traveller(state))}
     except ProviderError as exc:
         return {"status": "failed", "error": str(exc)}
 
