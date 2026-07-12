@@ -36,6 +36,9 @@ def build_flight_agent(llm=None):
 def _task(state: dict) -> str:
     allocation = state.get("budget_allocations", {}).get("flights")
     constraints = ", ".join(state.get("constraints", [])) or "none"
+    rejected = state.get("rejected_options", {}).get("flights", [])
+    rejected_note = "; ".join(
+        f"{o.get('airline')} at {o.get('price')}" for o in rejected) or "none"
     return (
         f"Trip request: {state.get('trip_goal')}\n"
         f"Origin: {state.get('origin')}\n"
@@ -44,6 +47,7 @@ def _task(state: dict) -> str:
         f"Travellers: {state.get('travellers')}\n"
         f"Flight budget target: {allocation}\n"
         f"Constraints: {constraints}\n"
+        f"Already rejected as too expensive (pick a cheaper alternative): {rejected_note}\n"
         f"Find and select the best flight."
     )
 
