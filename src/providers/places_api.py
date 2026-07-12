@@ -8,7 +8,7 @@ _URL = "https://places.googleapis.com/v1/places:searchText"
 _TIMEOUT = 30
 _FIELD_MASK = (
     "places.displayName,places.formattedAddress,"
-    "places.location,places.rating,places.types"
+    "places.location,places.rating,places.types,places.priceLevel"
 )
 
 
@@ -47,6 +47,7 @@ class GooglePlacesProvider:
             "name": place.get("displayName", {}).get("text"),
             "address": place.get("formattedAddress"),
             "rating": place.get("rating"),
+            "price_level": place.get("priceLevel"),
             "lat": location.get("latitude"),
             "lng": location.get("longitude"),
             "types": place.get("types", []),
