@@ -25,9 +25,10 @@ class TravelState(TypedDict):
     booking_status: dict
     approval: str | None
     next_action: str
+    traveller: dict
 
 
-def new_state(request: str) -> TravelState:
+def new_state(request: str, traveller: dict | None = None) -> TravelState:
     return TravelState(
         trip_goal=request,
         origin="",
@@ -51,6 +52,7 @@ def new_state(request: str) -> TravelState:
         booking_status={},
         approval=None,
         next_action="",
+        traveller=traveller or {},
     )
 
 
