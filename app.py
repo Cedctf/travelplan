@@ -1,3 +1,4 @@
+import re
 from datetime import date
 from uuid import uuid4
 
@@ -34,20 +35,16 @@ def render_entry(entry, container):
 
 def drive(stream, status):
     entries = st.session_state.trace
-    for chunk in stream:
-        if "__interrupt__" in chunk:
+    for mode, chunk in stream:
+        if mode == "custom":
+            entries.append(chunk)
+            render_entry(chunk, status)
+        elif mode == "updates" and "__interrupt__" in chunk:
             st.session_state.interrupt = chunk["__interrupt__"][0].value
-            continue
-        for node, update in chunk.items():
-            if not isinstance(update, dict):
-                continue
-            for entry in update.get("reasoning_trace", []):
-                entries.append(entry)
-                render_entry(entry, status)
     st.session_state.trace = entries
 
 
-def run_planning(request, traveller):
+def run_planning(request):
     app = build_graph()
     config = {"configurable": {"thread_id": str(uuid4())}, "recursion_limit": 60}
     st.session_state.app = app
@@ -55,17 +52,21 @@ def run_planning(request, traveller):
     st.session_state.trace = []
     st.session_state.interrupt = None
     with st.status("Agents are planning (live sandbox)…", expanded=True) as status:
-        drive(app.stream(new_state(request, traveller), config, stream_mode="updates"), status)
+        drive(app.stream(new_state(request), config,
+                         stream_mode=["updates", "custom"]), status)
         status.update(label="Planning complete", state="complete")
     st.session_state.snapshot = app.get_state(config).values
     st.session_state.stage = "planned" if app.get_state(config).next else "ended"
 
 
-def run_resume(decision):
+def run_resume(decision, traveller=None):
     app = st.session_state.app
     config = st.session_state.config
+    if traveller:
+        app.update_state(config, {"traveller": traveller})
     with st.status(f"Resuming with '{decision}'…", expanded=True) as status:
-        drive(app.stream(Command(resume=decision), config, stream_mode="updates"), status)
+        drive(app.stream(Command(resume=decision), config,
+                         stream_mode=["updates", "custom"]), status)
         status.update(label="Done", state="complete")
     st.session_state.snapshot = app.get_state(config).values
     st.session_state.stage = "booked"
@@ -73,12 +74,13 @@ def run_resume(decision):
 
 def render_constraints(s):
     st.subheader("Parsed request")
-    cols = st.columns(4)
-    cols[0].metric("From", s.get("origin") or "—")
-    cols[1].metric("To", s.get("destination") or "—")
     dates = s.get("dates") or {}
-    cols[2].metric("Nights", dates.get("nights") or "—")
-    cols[3].metric("Travellers", s.get("travellers") or "—")
+    st.markdown(
+        f"**From:** {s.get('origin') or '—'} · "
+        f"**To:** {s.get('destination') or '—'} · "
+        f"**Nights:** {dates.get('nights') or '—'} · "
+        f"**Travellers:** {s.get('travellers') or '—'}"
+    )
     if s.get("constraints"):
         st.write("**Constraints:** " + ", ".join(s["constraints"]))
     if s.get("preferences"):
@@ -87,12 +89,12 @@ def render_constraints(s):
 
 def render_budget(s):
     st.subheader("Budget")
-    cols = st.columns(3)
-    cols[0].metric("Total budget", s.get("budget_total"))
-    cols[1].metric("Estimated cost", s.get("estimated_total_cost"))
     remaining = s.get("budget_remaining")
-    cols[2].metric("Remaining", remaining,
-                   delta=None if remaining is None else round(remaining, 2))
+    st.markdown(
+        f"**Total budget:** {s.get('budget_total')} · "
+        f"**Estimated cost:** {s.get('estimated_total_cost')} · "
+        f"**Remaining:** {None if remaining is None else round(remaining, 2)}"
+    )
     alloc = s.get("budget_allocations") or {}
     if alloc:
         st.write("**Allocations:** "
@@ -116,6 +118,11 @@ def render_summary(s):
     itinerary = (s.get("selected_itinerary") or {}).get("plan")
     if itinerary:
         with st.expander("🗺️ Itinerary"):
+            st.markdown(
+                f"**Estimated trip cost:** {s.get('estimated_total_cost', '—')} "
+                f"(🛫 {flight.get('price', '—')} {flight.get('currency', '')} · "
+                f"🏨 {hotel.get('price', '—')} {hotel.get('currency', '')})"
+            )
             st.markdown(itinerary)
 
 
@@ -142,13 +149,28 @@ request = st.text_area(
     height=90,
 )
 
-with st.expander("👤 Traveller details (used when booking)", expanded=True):
+_E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
+
+
+def _adult_cutoff():
+    """Latest DOB that still counts as an adult (18+), for the airline."""
+    today = date.today()
+    try:
+        return today.replace(year=today.year - 18)
+    except ValueError:
+        return today.replace(year=today.year - 18, day=28)
+
+
+def render_traveller_form():
     c1, c2 = st.columns(2)
     given_name = c1.text_input("First name", value="")
     family_name = c2.text_input("Last name", value="")
     c3, c4 = st.columns(2)
     email = c3.text_input("Email", value="")
-    phone_number = c4.text_input("Phone number", value="", placeholder="+65...")
+    phone_number = c4.text_input("Phone number", value="+60",
+                                 placeholder="+60123456789",
+                                 help="International format with country code "
+                                      "(Malaysia +60 by default), e.g. +60123456789")
     c5, c6, c7 = st.columns(3)
     title = c5.selectbox("Title", ["mr", "mrs", "ms", "miss", "dr"])
     gender = c6.selectbox("Gender", ["m", "f"])
@@ -156,11 +178,9 @@ with st.expander("👤 Traveller details (used when booking)", expanded=True):
         "Date of birth",
         value=date(1990, 1, 1),
         min_value=date(1900, 1, 1),
-        max_value=date.today(),
+        max_value=_adult_cutoff(),
     )
-
-
-def collect_traveller():
+    phone_number = phone_number.replace(" ", "").replace("-", "")
     return {
         "title": title,
         "given_name": given_name,
@@ -169,26 +189,27 @@ def collect_traveller():
         "born_on": born_on.isoformat(),
         "email": email,
         "phone_number": phone_number,
-        # hotel provider uses camelCase names
         "firstName": given_name,
         "lastName": family_name,
     }
 
 
-def missing_details(traveller):
+def traveller_errors(traveller):
+    errors = []
     required = ["given_name", "family_name", "email", "phone_number"]
-    return [f for f in required if not traveller.get(f)]
+    missing = [f for f in required if not traveller.get(f)]
+    if missing:
+        errors.append("Fill in: " + ", ".join(f.replace("_", " ") for f in missing))
+    phone = traveller.get("phone_number") or ""
+    if phone and not _E164_RE.match(phone):
+        errors.append("Phone must be in international format with country code, "
+                      "e.g. +6591234567")
+    return errors
 
 
 if st.button("Plan trip", type="primary", disabled=st.session_state.stage == "running"):
-    traveller = collect_traveller()
-    missing = missing_details(traveller)
-    if missing:
-        st.error("Please fill in your traveller details before planning: "
-                 + ", ".join(f.replace("_", " ") for f in missing))
-    else:
-        run_planning(request, traveller)
-        st.rerun()
+    run_planning(request)
+    st.rerun()
 
 snap = st.session_state.snapshot
 if snap:
@@ -203,10 +224,17 @@ if st.session_state.stage == "planned":
     st.divider()
     st.subheader("Approval required")
     render_summary(snap)
+    st.markdown("**👤 Traveller details** (used to complete the booking)")
+    traveller = render_traveller_form()
     c1, c2 = st.columns(2)
     if c1.button("✅ Book this itinerary", type="primary"):
-        run_resume("approved")
-        st.rerun()
+        errors = traveller_errors(traveller)
+        if errors:
+            for err in errors:
+                st.error(err)
+        else:
+            run_resume("approved", traveller)
+            st.rerun()
     if c2.button("❌ Cancel"):
         run_resume("rejected")
         st.rerun()
