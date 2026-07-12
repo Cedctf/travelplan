@@ -1,7 +1,7 @@
 import ast
 import json
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent
 
 _MAX_OBSERVATION = 600
@@ -9,6 +9,38 @@ _MAX_OBSERVATION = 600
 
 def build_react_agent(llm, tools, system_prompt):
     return create_react_agent(llm, tools, prompt=system_prompt)
+
+
+def run_agent_streaming(agent, agent_name: str, task: str) -> list:
+    """Run a ReAct agent, emitting each trace entry to the live stream as soon
+    as it is complete (an action once its observation lands, a thought right
+    away). Returns the full final message list, exactly like ``agent.invoke``."""
+    try:
+        from langgraph.config import get_stream_writer
+        writer = get_stream_writer()
+    except Exception:
+        writer = None
+
+    messages: list = []
+    emitted: set[int] = set()
+
+    def flush(final: bool = False) -> None:
+        entries = messages_to_trace(agent_name, messages)
+        for i, entry in enumerate(entries):
+            if i in emitted:
+                continue
+            if entry["action"] and not entry["observation"] and not final:
+                continue
+            if writer:
+                writer(entry)
+            emitted.add(i)
+
+    for chunk in agent.stream({"messages": [HumanMessage(content=task)]},
+                              stream_mode="values"):
+        messages = chunk["messages"]
+        flush()
+    flush(final=True)
+    return messages
 
 
 def messages_to_trace(agent: str, messages: list) -> list[dict]:
