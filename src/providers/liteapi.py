@@ -1,6 +1,7 @@
 import httpx
 
 from src.config import get_settings
+from src.memory import MEMORY
 from src.providers.base import BookingFailed, SearchFailed, Unavailable
 
 _BASE_URL = "https://api.liteapi.travel/v3.0"
@@ -39,6 +40,11 @@ class LiteAPIHotelProvider:
     def search(self, location: str, check_in: str, check_out: str,
                guests: int, country_code: str | None = None) -> list[dict]:
         self._ctx = {"check_in": check_in, "check_out": check_out, "guests": guests}
+        cache_params = {"location": location, "check_in": check_in,
+                        "check_out": check_out, "guests": guests, "country": country_code}
+        cached = MEMORY.get("hotels", cache_params)
+        if cached is not None:
+            return cached
         params = {"cityName": location, "limit": _SEARCH_LIMIT}
         if country_code:
             params["countryCode"] = country_code
@@ -65,6 +71,7 @@ class LiteAPIHotelProvider:
             offer = self._cheapest_offer(entry, names)
             if offer:
                 results.append(offer)
+        MEMORY.put("hotels", cache_params, results)
         return results
 
     def compare(self, rates: list[dict]) -> list[dict]:
