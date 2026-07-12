@@ -1,6 +1,5 @@
-from langchain_core.messages import HumanMessage
-
-from src.agents.base import build_react_agent, extract_selection, messages_to_trace
+from src.agents.base import (build_react_agent, extract_selection,
+                             messages_to_trace, run_agent_streaming)
 from src.llm import get_llm
 from src.tools.hotels import compare_hotels, search_hotels, select_hotel
 
@@ -20,6 +19,9 @@ Your job:
 5. Call select_hotel with that offer's id to confirm its price.
 
 Rules:
+- The hotel budget target and every price you see are TOTALS for the whole
+  stay (all nights, all guests), not per-night. Compare the hotel's total price
+  directly against the target; do NOT divide the target by the number of nights.
 - Always finish by calling select_hotel for exactly one offer.
 - If search_hotels returns an empty list, widen the search (nearby area or
   adjusted dates) and try again before giving up.
@@ -37,6 +39,7 @@ def build_hotel_agent(llm=None):
 
 def _task(state: dict) -> str:
     allocation = state.get("budget_allocations", {}).get("hotel")
+    nights = (state.get("dates") or {}).get("nights")
     preferences = ", ".join(state.get("preferences", [])) or "none"
     rejected = state.get("rejected_options", {}).get("hotels", [])
     rejected_note = "; ".join(
@@ -46,7 +49,8 @@ def _task(state: dict) -> str:
         f"Destination: {state.get('destination')}\n"
         f"Dates: {state.get('dates')}\n"
         f"Guests: {state.get('travellers')}\n"
-        f"Hotel budget target: {allocation}\n"
+        f"Hotel budget target (TOTAL for the whole {nights}-night stay, "
+        f"not per night): {allocation}\n"
         f"Traveller interests: {preferences}\n"
         f"Already rejected as too expensive (pick a cheaper alternative): {rejected_note}\n"
         f"Find and select the best hotel."
@@ -55,8 +59,7 @@ def _task(state: dict) -> str:
 
 def hotel_node(state: dict) -> dict:
     agent = build_hotel_agent()
-    result = agent.invoke({"messages": [HumanMessage(content=_task(state))]})
-    messages = result["messages"]
+    messages = run_agent_streaming(agent, "hotel", _task(state))
     return {
         "selected_hotel": extract_selection(messages, "select_hotel"),
         "reasoning_trace": messages_to_trace("hotel", messages),
