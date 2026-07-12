@@ -1,3 +1,4 @@
+from datetime import date
 from uuid import uuid4
 
 import streamlit as st
@@ -46,7 +47,7 @@ def drive(stream, status):
     st.session_state.trace = entries
 
 
-def run_planning(request):
+def run_planning(request, traveller):
     app = build_graph()
     config = {"configurable": {"thread_id": str(uuid4())}, "recursion_limit": 60}
     st.session_state.app = app
@@ -54,7 +55,7 @@ def run_planning(request):
     st.session_state.trace = []
     st.session_state.interrupt = None
     with st.status("Agents are planning (live sandbox)…", expanded=True) as status:
-        drive(app.stream(new_state(request), config, stream_mode="updates"), status)
+        drive(app.stream(new_state(request, traveller), config, stream_mode="updates"), status)
         status.update(label="Planning complete", state="complete")
     st.session_state.snapshot = app.get_state(config).values
     st.session_state.stage = "planned" if app.get_state(config).next else "ended"
@@ -140,9 +141,54 @@ request = st.text_area(
           "with a budget of USD 4000. We love anime, food and nature. Nonstop flights.",
     height=90,
 )
+
+with st.expander("👤 Traveller details (used when booking)", expanded=True):
+    c1, c2 = st.columns(2)
+    given_name = c1.text_input("First name", value="")
+    family_name = c2.text_input("Last name", value="")
+    c3, c4 = st.columns(2)
+    email = c3.text_input("Email", value="")
+    phone_number = c4.text_input("Phone number", value="", placeholder="+65...")
+    c5, c6, c7 = st.columns(3)
+    title = c5.selectbox("Title", ["mr", "mrs", "ms", "miss", "dr"])
+    gender = c6.selectbox("Gender", ["m", "f"])
+    born_on = c7.date_input(
+        "Date of birth",
+        value=date(1990, 1, 1),
+        min_value=date(1900, 1, 1),
+        max_value=date.today(),
+    )
+
+
+def collect_traveller():
+    return {
+        "title": title,
+        "given_name": given_name,
+        "family_name": family_name,
+        "gender": gender,
+        "born_on": born_on.isoformat(),
+        "email": email,
+        "phone_number": phone_number,
+        # hotel provider uses camelCase names
+        "firstName": given_name,
+        "lastName": family_name,
+    }
+
+
+def missing_details(traveller):
+    required = ["given_name", "family_name", "email", "phone_number"]
+    return [f for f in required if not traveller.get(f)]
+
+
 if st.button("Plan trip", type="primary", disabled=st.session_state.stage == "running"):
-    run_planning(request)
-    st.rerun()
+    traveller = collect_traveller()
+    missing = missing_details(traveller)
+    if missing:
+        st.error("Please fill in your traveller details before planning: "
+                 + ", ".join(f.replace("_", " ") for f in missing))
+    else:
+        run_planning(request, traveller)
+        st.rerun()
 
 snap = st.session_state.snapshot
 if snap:
