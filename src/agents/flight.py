@@ -1,6 +1,5 @@
-from langchain_core.messages import HumanMessage
-
-from src.agents.base import build_react_agent, extract_selection, messages_to_trace
+from src.agents.base import (build_react_agent, extract_selection,
+                             messages_to_trace, run_agent_streaming)
 from src.llm import get_llm
 from src.tools.flights import compare_flights, search_flights, select_flight
 
@@ -18,6 +17,9 @@ Your job:
 5. Call select_flight with that offer's id to finalize your choice.
 
 Rules:
+- The flight budget target and every price you see are TOTALS for the whole
+  trip (round trip, all travellers), not per person. Compare the offer's total
+  price directly against the target; do NOT divide the target by travellers.
 - Always finish by calling select_flight for exactly one offer.
 - If search_flights returns an empty list, reason about an alternative (nearby
   airport or adjusted date) and search again before giving up.
@@ -45,7 +47,7 @@ def _task(state: dict) -> str:
         f"Destination: {state.get('destination')}\n"
         f"Dates: {state.get('dates')}\n"
         f"Travellers: {state.get('travellers')}\n"
-        f"Flight budget target: {allocation}\n"
+        f"Flight budget target (TOTAL for the whole trip, all travellers): {allocation}\n"
         f"Constraints: {constraints}\n"
         f"Already rejected as too expensive (pick a cheaper alternative): {rejected_note}\n"
         f"Find and select the best flight."
@@ -54,8 +56,7 @@ def _task(state: dict) -> str:
 
 def flight_node(state: dict) -> dict:
     agent = build_flight_agent()
-    result = agent.invoke({"messages": [HumanMessage(content=_task(state))]})
-    messages = result["messages"]
+    messages = run_agent_streaming(agent, "flight", _task(state))
     return {
         "selected_flight": extract_selection(messages, "select_flight"),
         "reasoning_trace": messages_to_trace("flight", messages),
