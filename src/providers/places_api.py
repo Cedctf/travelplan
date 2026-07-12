@@ -1,6 +1,7 @@
 import httpx
 
 from src.config import get_settings
+from src.memory import MEMORY
 from src.providers.base import SearchFailed
 
 _URL = "https://places.googleapis.com/v1/places:searchText"
@@ -23,6 +24,10 @@ class GooglePlacesProvider:
         }
 
     def search(self, query: str, location: str) -> list[dict]:
+        params = {"query": query, "location": location}
+        cached = MEMORY.get("places", params)
+        if cached is not None:
+            return cached
         text_query = f"{query} in {location}" if location else query
         try:
             response = httpx.post(_URL, headers=self._headers(),
@@ -31,7 +36,9 @@ class GooglePlacesProvider:
         except httpx.HTTPError as exc:
             raise SearchFailed(str(exc)) from exc
         places = response.json().get("places", [])
-        return [self._normalize(place) for place in places]
+        results = [self._normalize(place) for place in places]
+        MEMORY.put("places", params, results)
+        return results
 
     def _normalize(self, place: dict) -> dict:
         location = place.get("location", {})
