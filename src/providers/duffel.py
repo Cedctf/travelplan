@@ -1,6 +1,7 @@
 import httpx
 
 from src.config import get_settings
+from src.memory import MEMORY
 from src.providers.base import BookingFailed, SearchFailed, Unavailable
 
 _BASE_URL = "https://api.duffel.com"
@@ -50,6 +51,11 @@ class DuffelFlightProvider:
         if return_date:
             slices.append({"origin": destination, "destination": origin,
                            "departure_date": return_date})
+        params = {"origin": origin, "destination": destination,
+                  "depart": depart_date, "return": return_date, "travellers": travellers}
+        cached = MEMORY.get("flights", params)
+        if cached is not None:
+            return cached
         try:
             passenger_ids, offers = self._offer_request(slices, travellers)
         except httpx.HTTPError as exc:
@@ -63,6 +69,7 @@ class DuffelFlightProvider:
                 "owner": normalized["airline"],
             }
             results.append(normalized)
+        MEMORY.put("flights", params, results)
         return results
 
     def compare(self, offers: list[dict]) -> list[dict]:
