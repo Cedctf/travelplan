@@ -38,6 +38,9 @@ def build_hotel_agent(llm=None):
 def _task(state: dict) -> str:
     allocation = state.get("budget_allocations", {}).get("hotel")
     preferences = ", ".join(state.get("preferences", [])) or "none"
+    rejected = state.get("rejected_options", {}).get("hotels", [])
+    rejected_note = "; ".join(
+        f"{o.get('name')} at {o.get('price')}" for o in rejected) or "none"
     return (
         f"Trip request: {state.get('trip_goal')}\n"
         f"Destination: {state.get('destination')}\n"
@@ -45,6 +48,7 @@ def _task(state: dict) -> str:
         f"Guests: {state.get('travellers')}\n"
         f"Hotel budget target: {allocation}\n"
         f"Traveller interests: {preferences}\n"
+        f"Already rejected as too expensive (pick a cheaper alternative): {rejected_note}\n"
         f"Find and select the best hotel."
     )
 
