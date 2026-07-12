@@ -18,6 +18,7 @@ class TravelState(TypedDict):
     selected_hotel: dict | None
     selected_itinerary: dict | None
     estimated_total_cost: float
+    estimated_activities_cost: float
     planner_notes: Annotated[list[str], add]
     reasoning_trace: Annotated[list[dict], add]
     replanning_history: Annotated[list[dict], add]
@@ -45,6 +46,7 @@ def new_state(request: str, traveller: dict | None = None) -> TravelState:
         selected_hotel=None,
         selected_itinerary=None,
         estimated_total_cost=0.0,
+        estimated_activities_cost=0.0,
         planner_notes=[],
         reasoning_trace=[],
         replanning_history=[],
@@ -56,14 +58,25 @@ def new_state(request: str, traveller: dict | None = None) -> TravelState:
     )
 
 
+def emit(entry: dict) -> None:
+    """Push a single trace entry to the active stream (for live UI updates).
+
+    A no-op when called outside a LangGraph run (e.g. in tests)."""
+    try:
+        from langgraph.config import get_stream_writer
+        writer = get_stream_writer()
+    except Exception:
+        writer = None
+    if writer:
+        writer(entry)
+
+
 def trace(agent: str, thought: str, action: str, observation: str = "") -> dict:
-    return {
-        "reasoning_trace": [
-            {
-                "agent": agent,
-                "thought": thought,
-                "action": action,
-                "observation": observation,
-            }
-        ]
+    entry = {
+        "agent": agent,
+        "thought": thought,
+        "action": action,
+        "observation": observation,
     }
+    emit(entry)
+    return {"reasoning_trace": [entry]}
