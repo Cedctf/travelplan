@@ -4,6 +4,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from src.llm import get_llm
+from src.memory import add_rejected
 from src.orchestration.state import trace
 from src.tools.budget import CostSummary, analyze_savings, budget_calculator
 
@@ -136,6 +137,14 @@ def evaluate(state: dict) -> dict:
     ranked = analyze_savings(summary, state.get("budget_allocations", {}))
     target = ranked[0]["component"]
     updates["next_action"] = _COMPONENT_TO_AGENT[target]
+
+    rejected = state.get("rejected_options") or {"flights": [], "hotels": []}
+    if target == "flights" and state.get("selected_flight"):
+        rejected = add_rejected(rejected, "flights", state["selected_flight"])
+    elif target == "hotel" and state.get("selected_hotel"):
+        rejected = add_rejected(rejected, "hotels", state["selected_hotel"])
+    updates["rejected_options"] = rejected
+
     decision = (
         f"Over budget by {-calc['budget_remaining']}. "
         f"{target} has the most savings headroom; re-dispatch it."
