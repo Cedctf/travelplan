@@ -41,8 +41,11 @@ budget allocation across flights, hotel, and activities.
 Rules for the allocation:
 - Do NOT use fixed percentages. Base it on the destination, season, trip length,
   and number of travellers.
-- The three allocations must sum to at most the total budget.
-- Leave a sensible activities reserve.
+- The three allocations should sum to approximately the full total budget:
+  distribute the entire budget across flights, hotel, and activities so nothing
+  is left unallocated. This is a ceiling per category, not a spending target —
+  the specialist agents are free to spend less and leave the rest as savings.
+- Keep each category's share realistic for the destination and trip.
 
 Respond with ONLY a JSON object with exactly these fields:
 {
@@ -101,42 +104,30 @@ def planner_intake(state: dict, llm=None) -> dict:
     }
 
 
-def _cost_summary(state: dict) -> CostSummary:
+_INFEASIBLE_NOTE = (
+    "No feasible plan within budget after {n} attempts. "
+    "Try increasing the budget or changing the dates."
+)
+
+
+def _cost_summary(state: dict, use_actual_activities: bool = False) -> CostSummary:
     flight = (state.get("selected_flight") or {}).get("price") or 0.0
     hotel = (state.get("selected_hotel") or {}).get("price") or 0.0
-    activities = state.get("budget_allocations", {}).get("activities", 0.0)
+    if use_actual_activities and state.get("estimated_activities_cost"):
+        activities = state.get("estimated_activities_cost") or 0.0
+    else:
+        activities = state.get("budget_allocations", {}).get("activities", 0.0)
     return CostSummary(flights=float(flight), hotel=float(hotel),
                        activities=float(activities))
 
 
-def evaluate(state: dict) -> dict:
-    summary = _cost_summary(state)
-    calc = budget_calculator(state.get("budget_total", 0.0), summary)
-    updates = {
-        "estimated_total_cost": summary.total,
-        "budget_remaining": calc["budget_remaining"],
-    }
-    if not calc["over_budget"]:
-        updates["next_action"] = "approve"
-        updates.update(trace("planner",
-                             f"Total {summary.total} is within budget.",
-                             "evaluate", "within budget -> approval"))
-        return updates
-
-    replans = len(state.get("replanning_history", []))
-    if replans >= _MAX_REPLANS:
-        note = (
-            f"Still over budget after {replans} replanning attempts; no feasible "
-            f"solution found. Propose relaxing a constraint or raising the budget."
-        )
-        updates["next_action"] = "infeasible"
-        updates["planner_notes"] = [note]
-        updates.update(trace("planner", note, "evaluate", "infeasible"))
-        return updates
-
-    ranked = analyze_savings(summary, state.get("budget_allocations", {}))
+def _replan(state: dict, summary: CostSummary, calc: dict, allowed: set) -> dict:
+    """Pick the costliest over-allocated component (limited to ``allowed``) and
+    re-dispatch its agent, recording the rejected option and a history entry."""
+    ranked = [row for row in analyze_savings(summary, state.get("budget_allocations", {}))
+              if row["component"] in allowed]
     target = ranked[0]["component"]
-    updates["next_action"] = _COMPONENT_TO_AGENT[target]
+    updates = {"next_action": _COMPONENT_TO_AGENT[target]}
 
     rejected = state.get("rejected_options") or {"flights": [], "hotels": []}
     if target == "flights" and state.get("selected_flight"):
@@ -156,4 +147,66 @@ def evaluate(state: dict) -> dict:
         "ranked": ranked,
     }]
     updates.update(trace("planner", decision, "analyze_savings", f"target={target}"))
+    return updates
+
+
+def budget_gate(state: dict) -> dict:
+    """First budget check, right after flight + hotel are selected. These are
+    the fixed costs and the agents already pick the cheapest, so if they alone
+    exceed the budget the trip is impossible (activities can only add cost) and
+    we stop immediately. Otherwise we build the itinerary with what's left; any
+    trimming happens later, in the final check after the itinerary."""
+    flight = float((state.get("selected_flight") or {}).get("price") or 0.0)
+    hotel = float((state.get("selected_hotel") or {}).get("price") or 0.0)
+    fixed = flight + hotel
+    budget = state.get("budget_total", 0.0)
+    updates = {
+        "estimated_total_cost": fixed,
+        "budget_remaining": budget - fixed,
+    }
+    if fixed > budget:
+        note = (
+            f"Even the cheapest flight + hotel ({round(fixed, 2)}) exceed the "
+            f"budget ({round(budget, 2)}). Increase the budget or change the dates."
+        )
+        updates["next_action"] = "infeasible"
+        updates["planner_notes"] = [note]
+        updates.update(trace("planner", note, "budget_gate", "infeasible"))
+        return updates
+
+    updates["next_action"] = "itinerary"
+    updates.update(trace(
+        "planner",
+        f"Flight + hotel ({round(fixed, 2)}) fit within budget ({round(budget, 2)}); "
+        f"building the itinerary with the remaining {round(budget - fixed, 2)}.",
+        "budget_gate", "within budget -> itinerary"))
+    return updates
+
+
+def evaluate(state: dict) -> dict:
+    """Final budget check, after the itinerary. Uses the itinerary's actual
+    estimated activities cost. Over budget -> analyse which category to cut."""
+    summary = _cost_summary(state, use_actual_activities=True)
+    calc = budget_calculator(state.get("budget_total", 0.0), summary)
+    updates = {
+        "estimated_total_cost": summary.total,
+        "budget_remaining": calc["budget_remaining"],
+    }
+    if not calc["over_budget"]:
+        updates["next_action"] = "approve"
+        updates.update(trace("planner",
+                             f"Total {summary.total} is within budget.",
+                             "evaluate", "within budget -> approval"))
+        return updates
+
+    replans = len(state.get("replanning_history", []))
+    if replans >= _MAX_REPLANS:
+        note = _INFEASIBLE_NOTE.format(n=replans)
+        updates["next_action"] = "infeasible"
+        updates["planner_notes"] = [note]
+        updates.update(trace("planner", note, "evaluate", "infeasible"))
+        return updates
+
+    updates.update(_replan(state, summary, calc,
+                           allowed={"flights", "hotel", "activities"}))
     return updates
