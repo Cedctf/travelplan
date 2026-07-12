@@ -15,6 +15,28 @@ _DEFAULT_TRAVELLER = {
 }
 
 
+def _error_detail(exc: httpx.HTTPError) -> str:
+    """Include Duffel's response body (which names the offending field) in the
+    error, instead of only the generic status-code message."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return str(exc)
+    try:
+        errors = response.json().get("errors", [])
+    except ValueError:
+        return f"{exc} :: {response.text[:300]}"
+    parts = [
+        " ".join(filter(None, [
+            err.get("title"),
+            err.get("message"),
+            (err.get("source") or {}).get("pointer"),
+        ]))
+        for err in errors
+    ]
+    detail = "; ".join(p for p in parts if p)
+    return f"{exc} :: {detail}" if detail else str(exc)
+
+
 class DuffelFlightProvider:
     def __init__(self, api_key: str | None = None):
         self._api_key = api_key or get_settings().duffel_api_key
@@ -59,7 +81,7 @@ class DuffelFlightProvider:
         try:
             passenger_ids, offers = self._offer_request(slices, travellers)
         except httpx.HTTPError as exc:
-            raise SearchFailed(str(exc)) from exc
+            raise SearchFailed(_error_detail(exc)) from exc
         results = []
         for offer in offers:
             normalized = self._normalize(offer)
@@ -84,7 +106,7 @@ class DuffelFlightProvider:
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise Unavailable(str(exc)) from exc
+            raise Unavailable(_error_detail(exc)) from exc
         return self._normalize(response.json()["data"])
 
     def book(self, offer_id: str, passengers: list[dict]) -> dict:
@@ -98,7 +120,7 @@ class DuffelFlightProvider:
                 raise BookingFailed("No bookable offer returned on refresh.")
             order = self._create_order(offer, passenger_ids, passengers)
         except httpx.HTTPError as exc:
-            raise BookingFailed(str(exc)) from exc
+            raise BookingFailed(_error_detail(exc)) from exc
         return {
             "provider": "duffel",
             "order_id": order.get("id"),
