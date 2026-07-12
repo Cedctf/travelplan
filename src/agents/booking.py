@@ -12,8 +12,8 @@ def _book_flight(state: dict) -> dict:
     if not flight or not flight.get("id"):
         return {"status": "skipped"}
     try:
-        return {"status": "confirmed",
-                **get_flight_provider().book(flight["id"], [_traveller(state)])}
+        return {**get_flight_provider().book(flight["id"], [_traveller(state)]),
+                "status": "confirmed"}
     except ProviderError as exc:
         return {"status": "failed", "error": str(exc)}
 
@@ -23,8 +23,8 @@ def _book_hotel(state: dict) -> dict:
     if not hotel or not hotel.get("id"):
         return {"status": "skipped"}
     try:
-        return {"status": "confirmed",
-                **get_hotel_provider().book(hotel["id"], _traveller(state))}
+        return {**get_hotel_provider().book(hotel["id"], _traveller(state)),
+                "status": "confirmed"}
     except ProviderError as exc:
         return {"status": "failed", "error": str(exc)}
 
