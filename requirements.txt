@@ -2,6 +2,7 @@ langgraph
 langchain
 langchain-deepseek
 pydantic
+pyyaml
 python-dotenv
 httpx
 pytest
