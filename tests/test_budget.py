@@ -1,4 +1,4 @@
-from src.tools.budget import CostSummary, analyze_savings, budget_calculator
+from src.services.budget import CostSummary, analyze_savings, budget_calculator
 
 
 def test_cost_summary_total():
