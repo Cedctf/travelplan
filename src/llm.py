@@ -7,11 +7,11 @@ from langchain_deepseek import ChatDeepSeek
 from src.config import get_settings
 
 
-@lru_cache(maxsize=1)
-def get_llm() -> ChatDeepSeek:
+@lru_cache(maxsize=4)
+def get_llm(tier: str = "pro") -> ChatDeepSeek:
     settings = get_settings()
     return ChatDeepSeek(
-        model=settings.model,
+        model=settings.model_for(tier),
         api_key=settings.deepseek_api_key,
-        temperature=0,
+        temperature=settings.temperature,
     )
