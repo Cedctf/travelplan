@@ -1,38 +1,40 @@
-import ast
-import json
-
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langgraph.prebuilt import create_react_agent
+from langgraph.prebuilt import ToolNode, create_react_agent
 
-_MAX_OBSERVATION = 600
+from src.config import get_settings
+from src.orchestration.state import emit
+from src.providers.base import ProviderError
+
+
+def _handle_tool_error(exc: Exception) -> str:
+    if isinstance(exc, ProviderError):
+        return (
+            f"Tool call failed — {type(exc).__name__}: {exc}. This is usually a "
+            f"transient provider or network issue. Try the call again, adjust the "
+            f"arguments, or continue with the results you already have."
+        )
+    raise exc
 
 
 def build_react_agent(llm, tools, system_prompt):
-    return create_react_agent(llm, tools, prompt=system_prompt)
+    tool_node = ToolNode(tools, handle_tool_errors=_handle_tool_error)
+    return create_react_agent(llm, tool_node, prompt=system_prompt)
 
 
-def run_agent_streaming(agent, agent_name: str, task: str) -> list:
-    """Run a ReAct agent, emitting each trace entry to the live stream as soon
-    as it is complete (an action once its observation lands, a thought right
-    away). Returns the full final message list, exactly like ``agent.invoke``."""
-    try:
-        from langgraph.config import get_stream_writer
-        writer = get_stream_writer()
-    except Exception:
-        writer = None
-
+def run_agent_streaming(agent, agent_name: str, task: str) -> tuple[list, list[dict]]:
     messages: list = []
+    entries: list[dict] = []
     emitted: set[int] = set()
 
     def flush(final: bool = False) -> None:
+        nonlocal entries
         entries = messages_to_trace(agent_name, messages)
         for i, entry in enumerate(entries):
             if i in emitted:
                 continue
             if entry["action"] and not entry["observation"] and not final:
                 continue
-            if writer:
-                writer(entry)
+            emit(entry)
             emitted.add(i)
 
     for chunk in agent.stream({"messages": [HumanMessage(content=task)]},
@@ -40,7 +42,7 @@ def run_agent_streaming(agent, agent_name: str, task: str) -> list:
         messages = chunk["messages"]
         flush()
     flush(final=True)
-    return messages
+    return messages, entries
 
 
 def messages_to_trace(agent: str, messages: list) -> list[dict]:
@@ -75,7 +77,7 @@ def extract_selection(messages: list, select_tool: str):
     selection = None
     for message in messages:
         if isinstance(message, ToolMessage) and message.tool_call_id in ids:
-            selection = _coerce(message.content)
+            selection = message.artifact
     return selection
 
 
@@ -84,8 +86,11 @@ def collect_tool_results(messages: list, tool_name: str) -> list:
     results = []
     for message in messages:
         if isinstance(message, ToolMessage) and message.tool_call_id in ids:
-            coerced = _coerce(message.content)
-            results.extend(coerced if isinstance(coerced, list) else [coerced])
+            artifact = message.artifact
+            if isinstance(artifact, list):
+                results.extend(artifact)
+            elif artifact is not None:
+                results.append(artifact)
     return results
 
 
@@ -108,16 +113,5 @@ def _tool_call_ids(messages: list, tool_name: str) -> set:
 
 
 def _truncate(text: str) -> str:
-    return text if len(text) <= _MAX_OBSERVATION else text[:_MAX_OBSERVATION] + "..."
-
-
-def _coerce(content):
-    if isinstance(content, (dict, list)):
-        return content
-    if isinstance(content, str):
-        for parser in (json.loads, ast.literal_eval):
-            try:
-                return parser(content)
-            except (ValueError, SyntaxError):
-                continue
-    return content
+    limit = get_settings().max_observation_chars
+    return text if len(text) <= limit else text[:limit] + "..."
