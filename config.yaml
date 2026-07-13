@@ -1,0 +1,18 @@
+llm:
+  temperature: 0
+  models:
+    flash: ""
+
+planner:
+  max_replans: 3
+
+agents:
+  max_observation_chars: 600
+
+selection:
+  flight:
+    price_weight: 1.0
+    stops_penalty: 0.15
+    require_nonstop_when_constrained: true
+  hotel:
+    price_weight: 1.0
