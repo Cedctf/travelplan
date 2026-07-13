@@ -1,40 +1,22 @@
-from src.agents.base import (build_react_agent, extract_selection,
-                             messages_to_trace, run_agent_streaming)
+from functools import lru_cache
+
+from src.agents.base import (build_react_agent, collect_tool_results,
+                             extract_selection, run_agent_streaming)
+from src.config import get_settings
 from src.llm import get_llm
-from src.tools.hotels import compare_hotels, search_hotels, select_hotel
+from src.memory import rejected_ids
+from src.orchestration.state import trace
+from src.prompts import HOTEL_SYSTEM_PROMPT
+from src.providers.registry import get_hotel_provider
+from src.services.selection import select_hotel
+from src.tools.hotels import compare_hotels, search_hotels, select_hotel as select_hotel_tool
 
-_TOOLS = [search_hotels, compare_hotels, select_hotel]
-
-_SYSTEM_PROMPT = """You are the Hotel Agent, a domain expert for accommodation.
-
-You reason with the ReAct pattern: think, call a tool, observe, repeat.
-
-Your job:
-1. Read the trip request and the planner's hotel budget target.
-2. Call search_hotels with the destination city, YYYY-MM-DD dates, guests, and
-   the ISO country code when you know it.
-3. Call compare_hotels to rank the results cheapest first.
-4. Pick the best option within the hotel budget target and near the traveller's
-   interests when possible.
-5. Call select_hotel with that offer's id to confirm its price.
-
-Rules:
-- The hotel budget target and every price you see are TOTALS for the whole
-  stay (all nights, all guests), not per-night. Compare the hotel's total price
-  directly against the target; do NOT divide the target by the number of nights.
-- Always finish by calling select_hotel for exactly one offer.
-- If search_hotels returns an empty list, widen the search (nearby area or
-  adjusted dates) and try again before giving up.
-- Never book. Selection only.
-
-Example sequence:
-  search_hotels(location='New York', check_in='2026-12-10', check_out='2026-12-15', guests=2, country_code='US')
-  compare_hotels(rates=<result>)
-  select_hotel(offer_id='...')"""
+_TOOLS = [search_hotels, compare_hotels, select_hotel_tool]
 
 
+@lru_cache(maxsize=None)
 def build_hotel_agent(llm=None):
-    return build_react_agent(llm or get_llm(), _TOOLS, _SYSTEM_PROMPT)
+    return build_react_agent(llm or get_llm(), _TOOLS, HOTEL_SYSTEM_PROMPT)
 
 
 def _task(state: dict) -> str:
@@ -53,14 +35,45 @@ def _task(state: dict) -> str:
         f"not per night): {allocation}\n"
         f"Traveller interests: {preferences}\n"
         f"Already rejected as too expensive (pick a cheaper alternative): {rejected_note}\n"
-        f"Find and select the best hotel."
+        f"Search and compare hotels, then surface your ranked candidates."
     )
+
+
+def _candidates(messages: list) -> list[dict]:
+    ranked = collect_tool_results(messages, "compare_hotels")
+    return ranked or collect_tool_results(messages, "search_hotels")
+
+
+def _confirm(offer: dict) -> dict:
+    try:
+        return get_hotel_provider().select(offer["id"]) or offer
+    except Exception:
+        return offer
 
 
 def hotel_node(state: dict) -> dict:
     agent = build_hotel_agent()
-    messages = run_agent_streaming(agent, "hotel", _task(state))
+    messages, reasoning_trace = run_agent_streaming(agent, "hotel", _task(state))
+
+    candidates = _candidates(messages)
+    cfg = (get_settings().selection or {}).get("hotel", {})
+    chosen = select_hotel(
+        candidates,
+        state.get("budget_allocations", {}).get("hotel"),
+        rejected_ids(state, "hotels"),
+        cfg,
+    )
+    if chosen is not None:
+        selected = _confirm(chosen)
+        reasoning_trace = reasoning_trace + [trace(
+            "hotel",
+            f"Selected {selected.get('name')} at {selected.get('price')} "
+            f"deterministically from {len(candidates)} candidate(s).",
+            "select_hotel", str(selected.get("id")))["reasoning_trace"][0]]
+    else:
+        selected = extract_selection(messages, "select_hotel")
+
     return {
-        "selected_hotel": extract_selection(messages, "select_hotel"),
-        "reasoning_trace": messages_to_trace("hotel", messages),
+        "selected_hotel": selected,
+        "reasoning_trace": reasoning_trace,
     }
