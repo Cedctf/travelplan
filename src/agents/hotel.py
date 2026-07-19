@@ -55,23 +55,31 @@ def hotel_node(state: dict) -> dict:
     agent = build_hotel_agent()
     messages, reasoning_trace = run_agent_streaming(agent, "hotel", _task(state))
 
-    candidates = _candidates(messages)
-    cfg = (get_settings().selection or {}).get("hotel", {})
-    chosen = select_hotel(
-        candidates,
-        state.get("budget_allocations", {}).get("hotel"),
-        rejected_ids(state, "hotels"),
-        cfg,
-    )
-    if chosen is not None:
-        selected = _confirm(chosen)
+    selected = extract_selection(messages, "select_hotel")
+
+    if selected is None:
+        candidates = _candidates(messages)
+        cfg = (get_settings().selection or {}).get("hotel", {})
+        chosen = select_hotel(
+            candidates,
+            state.get("budget_allocations", {}).get("hotel"),
+            rejected_ids(state, "hotels"),
+            cfg,
+        )
+        if chosen is not None:
+            selected = _confirm(chosen)
+            reasoning_trace = reasoning_trace + [trace(
+                "hotel",
+                f"LLM did not select; deterministic fallback chose "
+                f"{selected.get('name')} at {selected.get('price')} "
+                f"from {len(candidates)} candidate(s).",
+                "select_hotel_fallback", str(selected.get("id")))["reasoning_trace"][0]]
+    else:
         reasoning_trace = reasoning_trace + [trace(
             "hotel",
-            f"Selected {selected.get('name')} at {selected.get('price')} "
-            f"deterministically from {len(candidates)} candidate(s).",
+            f"LLM selected {selected.get('name')} at {selected.get('price')} "
+            f"via reasoning.",
             "select_hotel", str(selected.get("id")))["reasoning_trace"][0]]
-    else:
-        selected = extract_selection(messages, "select_hotel")
 
     return {
         "selected_hotel": selected,

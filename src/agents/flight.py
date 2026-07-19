@@ -54,24 +54,32 @@ def flight_node(state: dict) -> dict:
     agent = build_flight_agent()
     messages, reasoning_trace = run_agent_streaming(agent, "flight", _task(state))
 
-    candidates = _candidates(messages)
-    cfg = (get_settings().selection or {}).get("flight", {})
-    chosen = select_flight(
-        candidates,
-        state.get("budget_allocations", {}).get("flights"),
-        state.get("constraints", []),
-        rejected_ids(state, "flights"),
-        cfg,
-    )
-    if chosen is not None:
-        selected = _confirm(chosen)
+    selected = extract_selection(messages, "select_flight")
+
+    if selected is None:
+        candidates = _candidates(messages)
+        cfg = (get_settings().selection or {}).get("flight", {})
+        chosen = select_flight(
+            candidates,
+            state.get("budget_allocations", {}).get("flights"),
+            state.get("constraints", []),
+            rejected_ids(state, "flights"),
+            cfg,
+        )
+        if chosen is not None:
+            selected = _confirm(chosen)
+            reasoning_trace = reasoning_trace + [trace(
+                "flight",
+                f"LLM did not select; deterministic fallback chose "
+                f"{selected.get('airline')} at {selected.get('price')} "
+                f"from {len(candidates)} candidate(s).",
+                "select_flight_fallback", str(selected.get("id")))["reasoning_trace"][0]]
+    else:
         reasoning_trace = reasoning_trace + [trace(
             "flight",
-            f"Selected {selected.get('airline')} at {selected.get('price')} "
-            f"deterministically from {len(candidates)} candidate(s).",
+            f"LLM selected {selected.get('airline')} at {selected.get('price')} "
+            f"via reasoning.",
             "select_flight", str(selected.get("id")))["reasoning_trace"][0]]
-    else:
-        selected = extract_selection(messages, "select_flight")
 
     return {
         "selected_flight": selected,
