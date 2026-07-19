@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import re
 from datetime import date
 from uuid import uuid4
