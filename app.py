@@ -11,8 +11,6 @@ from langgraph.types import Command
 from src.orchestration.graph import build_graph
 from src.orchestration.state import new_state
 
-ICONS = {"planner": "🧠", "flight": "🛫", "hotel": "🏨", "itinerary": "🗺️"}
-
 st.set_page_config(page_title="Agentic Travel Planner", layout="wide")
 
 
@@ -26,9 +24,8 @@ def init_state():
 
 
 def render_entry(entry, container):
-    icon = ICONS.get(entry["agent"], "•")
     with container:
-        st.markdown(f"**{icon} {entry['agent']}** — {entry['thought'] or ''}")
+        st.markdown(f"**{entry['agent']}** — {entry['thought'] or ''}")
         if entry["action"]:
             st.code(entry["action"], language="text")
         if entry["observation"]:
@@ -47,14 +44,15 @@ def drive(stream, status):
     st.session_state.trace = entries
 
 
-def run_planning(request):
+def run_planning(request, container):
     app = build_graph()
     config = {"configurable": {"thread_id": str(uuid4())}, "recursion_limit": 60}
     st.session_state.app = app
     st.session_state.config = config
     st.session_state.trace = []
     st.session_state.interrupt = None
-    with st.status("Agents are planning (live sandbox)…", expanded=True) as status:
+    with container, st.status("Agents are planning (live sandbox)…",
+                              expanded=True) as status:
         drive(app.stream(new_state(request), config,
                          stream_mode=["updates", "custom"]), status)
         status.update(label="Planning complete", state="complete")
@@ -62,12 +60,13 @@ def run_planning(request):
     st.session_state.stage = "planned" if app.get_state(config).next else "ended"
 
 
-def run_resume(decision, traveller=None):
+def run_resume(decision, container, traveller=None):
     app = st.session_state.app
     config = st.session_state.config
     if traveller:
         app.update_state(config, {"traveller": traveller})
-    with st.status(f"Resuming with '{decision}'…", expanded=True) as status:
+    with container, st.status(f"Resuming with '{decision}'…",
+                              expanded=True) as status:
         drive(app.stream(Command(resume=decision), config,
                          stream_mode=["updates", "custom"]), status)
         status.update(label="Done", state="complete")
@@ -114,17 +113,17 @@ def render_summary(s):
     flight = s.get("selected_flight") or {}
     hotel = s.get("selected_hotel") or {}
     cols = st.columns(2)
-    cols[0].markdown(f"🛫 **Flight** — {flight.get('airline', '—')} · "
+    cols[0].markdown(f"**Flight** — {flight.get('airline', '—')} · "
                      f"{flight.get('price', '—')} {flight.get('currency', '')}")
-    cols[1].markdown(f"🏨 **Hotel** — {hotel.get('name', '—')} · "
+    cols[1].markdown(f"**Hotel** — {hotel.get('name', '—')} · "
                      f"{hotel.get('price', '—')} {hotel.get('currency', '')}")
     itinerary = (s.get("selected_itinerary") or {}).get("plan")
     if itinerary:
-        with st.expander("🗺️ Itinerary"):
+        with st.expander("Itinerary"):
             st.markdown(
                 f"**Estimated trip cost:** {s.get('estimated_total_cost', '—')} "
-                f"(🛫 {flight.get('price', '—')} {flight.get('currency', '')} · "
-                f"🏨 {hotel.get('price', '—')} {hotel.get('currency', '')})"
+                f"({flight.get('price', '—')} {flight.get('currency', '')} · "
+                f"{hotel.get('price', '—')} {hotel.get('currency', '')})"
             )
             st.markdown(itinerary)
 
@@ -133,7 +132,7 @@ def render_booking(s):
     status = s.get("booking_status") or {}
     overall = status.get("overall")
     if overall == "confirmed":
-        st.success("Booking confirmed ✅")
+        st.success("Booking confirmed")
     elif overall == "blocked":
         st.warning("Booking blocked — approval was not granted.")
     else:
@@ -142,15 +141,10 @@ def render_booking(s):
 
 
 init_state()
-st.title("✈️ Agentic Travel Planner")
+st.title("Agentic Travel Planner")
 st.caption("Planner + Flight / Hotel / Itinerary specialists · live sandbox APIs")
 
-request = st.text_area(
-    "Travel request",
-    value="Plan a 5-day trip to Tokyo from Singapore in December for 2 people "
-          "with a budget of USD 4000. We love anime, food and nature. Nonstop flights.",
-    height=90,
-)
+live = st.container()
 
 _E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
 
@@ -210,10 +204,6 @@ def traveller_errors(traveller):
     return errors
 
 
-if st.button("Plan trip", type="primary", disabled=st.session_state.stage == "running"):
-    run_planning(request)
-    st.rerun()
-
 snap = st.session_state.snapshot
 if snap:
     render_constraints(snap)
@@ -227,19 +217,19 @@ if st.session_state.stage == "planned":
     st.divider()
     st.subheader("Approval required")
     render_summary(snap)
-    st.markdown("**👤 Traveller details** (used to complete the booking)")
+    st.markdown("**Traveller details** (used to complete the booking)")
     traveller = render_traveller_form()
     c1, c2 = st.columns(2)
-    if c1.button("✅ Book this itinerary", type="primary"):
+    if c1.button("Book this itinerary", type="primary"):
         errors = traveller_errors(traveller)
         if errors:
             for err in errors:
                 st.error(err)
         else:
-            run_resume("approved", traveller)
+            run_resume("approved", live, traveller)
             st.rerun()
-    if c2.button("❌ Cancel"):
-        run_resume("rejected")
+    if c2.button("Cancel"):
+        run_resume("rejected", live)
         st.rerun()
 
 if st.session_state.stage == "booked":
@@ -251,3 +241,36 @@ if st.session_state.stage == "ended":
     st.warning("No feasible plan within budget.")
     for note in snap.get("planner_notes", []):
         st.write("• " + note)
+
+st.markdown(
+    """
+    <style>
+    .st-key-input_bar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 100;
+        margin: 0 auto;
+        max-width: 46rem;
+        padding: 0.75rem 1.25rem 1rem;
+        background: var(--background-color, #fff);
+    }
+    .stMainBlockContainer { padding-bottom: 16rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+with st.container(key="input_bar"):
+    request = st.text_area(
+        "Travel request",
+        value="Plan a 3-day trip to Bangkok from Singapore in March for 1 person "
+              "with a budget of USD 6000. We love street food and temples.",
+        height=90,
+    )
+    if st.button("Plan trip", type="primary",
+                 disabled=st.session_state.stage == "running",
+                 use_container_width=True):
+        run_planning(request, live)
+        st.rerun()
